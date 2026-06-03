@@ -34,10 +34,13 @@ async function initDb() {
       name TEXT UNIQUE NOT NULL,
       total_winnings BIGINT NOT NULL DEFAULT 0,
       best_layer INT NOT NULL DEFAULT 0,
+      best_win BIGINT NOT NULL DEFAULT 0,
       runs INT NOT NULL DEFAULT 0,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
+  // mevcut tabloya best_win kolonu yoksa ekle (geriye dönük uyum)
+  await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS best_win BIGINT NOT NULL DEFAULT 0;`);
   console.log("DB hazır.");
 }
 
@@ -60,18 +63,20 @@ app.post("/scores", rateLimit, async (req, res) => {
       return res.status(400).json({ error: "Geçersiz kazanç." });
 
     layersCleared = Math.max(0, Math.min(3, parseInt(layersCleared) || 0));
+    const bestWinCandidate = win > 0 ? win : 0; // sadece pozitif kazançlar "en iyi" sayılır
 
-    // upsert: oyuncu varsa topla, yoksa oluştur
+    // upsert: total topla, best_layer ve best_win en iyiyi tut
     const result = await pool.query(
-      `INSERT INTO players (name, total_winnings, best_layer, runs)
-       VALUES ($1, $2, $3, 1)
+      `INSERT INTO players (name, total_winnings, best_layer, best_win, runs)
+       VALUES ($1, $2, $3, $4, 1)
        ON CONFLICT (name) DO UPDATE SET
          total_winnings = players.total_winnings + EXCLUDED.total_winnings,
          best_layer = GREATEST(players.best_layer, EXCLUDED.best_layer),
+         best_win = GREATEST(players.best_win, EXCLUDED.best_win),
          runs = players.runs + 1,
          updated_at = now()
-       RETURNING name, total_winnings, best_layer, runs;`,
-      [name, win, layersCleared]
+       RETURNING name, total_winnings, best_layer, best_win, runs;`,
+      [name, win, layersCleared, bestWinCandidate]
     );
     res.json({ ok: true, player: result.rows[0] });
   } catch (e) {
@@ -80,13 +85,14 @@ app.post("/scores", rateLimit, async (req, res) => {
   }
 });
 
-// ---- liderlik tablosu ----
+// ---- liderlik tablosu (performansa göre: en yüksek katman, eşitlikte en iyi kazanç) ----
 app.get("/leaderboard", async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT name, total_winnings, best_layer, runs
+      `SELECT name, best_layer, best_win, runs
        FROM players
-       ORDER BY total_winnings DESC
+       WHERE best_layer > 0
+       ORDER BY best_layer DESC, best_win DESC
        LIMIT 50;`
     );
     res.json({ leaderboard: result.rows });
