@@ -102,6 +102,83 @@ app.get("/leaderboard", async (req, res) => {
   }
 });
 
+// ============================================================
+//   DÜELLO ODA SİSTEMİ (bellekte, 1 dk geçerli)
+//   Oda: { seed, host, guest, results:{name:{score,layer,...}}, createdAt }
+// ============================================================
+const rooms = new Map();
+const ROOM_TTL = 60 * 1000;        // oda kurulduktan sonra katılma süresi: 1 dk
+const RESULT_TTL = 30 * 60 * 1000; // sonuçlar 30 dk saklanır
+
+// süresi geçen odaları temizle
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, r] of rooms) {
+    const age = now - r.createdAt;
+    // hiç kimse katılmadan 1 dk geçtiyse VEYA 30 dk dolduysa sil
+    if ((!r.guest && age > ROOM_TTL) || age > RESULT_TTL) rooms.delete(id);
+  }
+}, 15000);
+
+function genRoomId() {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // karışması zor karakterler
+  let id;
+  do { id = Array.from({length:4},()=>chars[Math.floor(Math.random()*chars.length)]).join(""); }
+  while (rooms.has(id));
+  return id;
+}
+
+// oda kur → room id + seed döner
+app.post("/duel/create", rateLimit, (req, res) => {
+  let { name } = req.body || {};
+  name = (name||"").trim().slice(0,16);
+  if (name.length < 2) return res.status(400).json({ error: "İsim gerekli." });
+  const id = genRoomId();
+  const seed = Math.floor(Math.random() * 1e9);
+  rooms.set(id, { seed, host: name, guest: null, results: {}, createdAt: Date.now() });
+  res.json({ roomId: id, seed, host: name });
+});
+
+// odaya katıl → aynı seed döner
+app.post("/duel/join", rateLimit, (req, res) => {
+  let { name, roomId } = req.body || {};
+  name = (name||"").trim().slice(0,16);
+  roomId = (roomId||"").trim().toUpperCase();
+  const room = rooms.get(roomId);
+  if (!room) return res.status(404).json({ error: "Oda bulunamadı ya da süresi doldu." });
+  if (Date.now() - room.createdAt > ROOM_TTL && !room.guest)
+    return res.status(410).json({ error: "Oda süresi doldu." });
+  if (room.guest && room.guest !== name)
+    return res.status(409).json({ error: "Oda dolu." });
+  if (name === room.host) return res.status(409).json({ error: "Bu isim oda sahibi." });
+  room.guest = name;
+  res.json({ roomId, seed: room.seed, host: room.host, guest: name });
+});
+
+// sonuç gönder
+app.post("/duel/result", rateLimit, (req, res) => {
+  let { name, roomId, score, layer, won } = req.body || {};
+  name = (name||"").trim().slice(0,16);
+  roomId = (roomId||"").trim().toUpperCase();
+  const room = rooms.get(roomId);
+  if (!room) return res.status(404).json({ error: "Oda bulunamadı." });
+  score = Math.max(0, Math.min(99999, parseInt(score)||0));
+  layer = Math.max(0, Math.min(3, parseInt(layer)||0));
+  room.results[name] = { score, layer, won: !!won, at: Date.now() };
+  res.json({ ok: true });
+});
+
+// oda durumu / sonuçları çek (polling)
+app.get("/duel/status/:roomId", (req, res) => {
+  const room = rooms.get((req.params.roomId||"").toUpperCase());
+  if (!room) return res.status(404).json({ error: "Oda bulunamadı." });
+  res.json({
+    host: room.host, guest: room.guest,
+    results: room.results,
+    bothDone: room.host && room.guest && room.results[room.host] && room.results[room.guest],
+  });
+});
+
 const PORT = process.env.PORT || 3000;
 initDb()
   .then(() => app.listen(PORT, () => console.log(`Noatro backend ${PORT} portunda.`)))
