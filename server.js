@@ -62,7 +62,7 @@ app.post("/scores", rateLimit, async (req, res) => {
     if (!Number.isFinite(win) || Math.abs(win) > 1_000_000)
       return res.status(400).json({ error: "Geçersiz kazanç." });
 
-    layersCleared = Math.max(0, Math.min(3, parseInt(layersCleared) || 0));
+    layersCleared = Math.max(0, Math.min(5, parseInt(layersCleared) || 0));
     const bestWinCandidate = win > 0 ? win : 0; // sadece pozitif kazançlar "en iyi" sayılır
 
     // upsert: total topla, best_layer ve best_win en iyiyi tut
@@ -163,7 +163,7 @@ app.post("/duel/result", rateLimit, (req, res) => {
   const room = rooms.get(roomId);
   if (!room) return res.status(404).json({ error: "Oda bulunamadı." });
   score = Math.max(0, Math.min(99999, parseInt(score)||0));
-  layer = Math.max(0, Math.min(3, parseInt(layer)||0));
+  layer = Math.max(0, Math.min(5, parseInt(layer)||0));
   room.results[name] = { score, layer, won: !!won, at: Date.now() };
   res.json({ ok: true });
 });
